@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ODIN_VERSION="dev-2026-08"
+ODIN_SHA256="d858c0a182bb28d7b04b04dbb8aed592a9c96c84e4400ee917c74b45848a4d87"
+ODIN_ROOT="/opt/odin/$ODIN_VERSION"
+
+missing_packages=()
+for package in ca-certificates curl clang; do
+	if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q '^install ok installed$'; then
+		missing_packages+=("$package")
+	fi
+done
+
+if ((${#missing_packages[@]})); then
+	echo "Installing system packages: ${missing_packages[*]}"
+	sudo apt-get update
+	sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}"
+fi
+
+case "$(uname -m)" in
+	x86_64) odin_arch="amd64" ;;
+	*) echo "Unsupported architecture for the pinned Odin release: $(uname -m)" >&2; exit 1 ;;
+esac
+
+if [[ ! -x "$ODIN_ROOT/odin" || ! -f "$ODIN_ROOT/.installed-$ODIN_VERSION" ]]; then
+	echo "Installing Odin $ODIN_VERSION ($odin_arch)"
+	archive="$(mktemp)"
+	trap 'rm -f "$archive"' EXIT
+	curl -fsSL "https://github.com/odin-lang/Odin/releases/download/$ODIN_VERSION/odin-linux-$odin_arch-$ODIN_VERSION.tar.gz" -o "$archive"
+	echo "$ODIN_SHA256  $archive" | sha256sum --check --status
+	sudo rm -rf "$ODIN_ROOT"
+	sudo install -d "$ODIN_ROOT"
+	sudo tar -xzf "$archive" --strip-components=1 -C "$ODIN_ROOT"
+	sudo touch "$ODIN_ROOT/.installed-$ODIN_VERSION"
+fi
+
+sudo ln -sfn "$ODIN_ROOT/odin" /usr/local/bin/odin
+
+echo "Clang: $(clang --version | head -n 1)"
+echo "Odin:  $(odin version)"
