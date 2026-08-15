@@ -2,12 +2,14 @@ package main
 
 import "core:flags"
 import "core:fmt"
+import "core:io"
 import "core:os"
 
 import "../../src/fuzzer"
 import "../../src/haversine"
 
 PAIRS_PATH :: "pairs.json"
+DISTANCES_PATH :: "distance.f64"
 
 Options :: struct {
 	seed:             u64 `args:"required" usage:"Seed for the random number generator."`,
@@ -24,17 +26,17 @@ random_bounds :: proc(randomizer: ^fuzzer.Fuzzer, low, high: f64) -> (f64, f64) 
 	return min(bound_0, bound_1), max(bound_0, bound_1)
 }
 
-open_pairs_file :: proc() -> ^os.File {
-	pairs_file, open_error := os.open(
-		PAIRS_PATH,
+open_append_file :: proc(path: string) -> ^os.File {
+	file, open_error := os.open(
+		path,
 		{.Write, .Append, .Create},
 		os.Permissions_Default_File,
 	)
 	if open_error != nil {
-		fmt.eprintfln("Could not open %q: %v", PAIRS_PATH, open_error)
+		fmt.eprintfln("Could not open %q: %v", path, open_error)
 		os.exit(1)
 	}
-	return pairs_file
+	return file
 }
 
 append_pair :: proc(pairs_file: ^os.File, x0, y0, x1, y1: f64) {
@@ -46,6 +48,16 @@ append_pair :: proc(pairs_file: ^os.File, x0, y0, x1, y1: f64) {
 		x1,
 		y1,
 	)
+}
+
+append_distance :: proc(distances_file: ^os.File, distance: f64) {
+	value := f64le(distance)
+	bytes := ([^]byte)(&value)[:size_of(value)]
+	_, write_error := io.write_full(os.to_stream(distances_file), bytes)
+	if write_error != nil {
+		fmt.eprintfln("Could not append to %q: %v", DISTANCES_PATH, write_error)
+		os.exit(1)
+	}
 }
 
 main :: proc() {
@@ -62,8 +74,10 @@ main :: proc() {
 	}
 	pairs_per_cluster := options.number_of_points / options.n_clusters
 
-	pairs_file := open_pairs_file()
+	pairs_file := open_append_file(PAIRS_PATH)
 	defer os.close(pairs_file)
+	distances_file := open_append_file(DISTANCES_PATH)
+	defer os.close(distances_file)
 
 	randomizer: fuzzer.Fuzzer
 	fuzzer.init(&randomizer, options.seed)
@@ -81,10 +95,12 @@ main :: proc() {
 			y0 := fuzzer.random_number(&randomizer, y_low, y_high)
 			x1 := fuzzer.random_number(&randomizer, x_low, x_high)
 			y1 := fuzzer.random_number(&randomizer, y_low, y_high)
+			distance := haversine.distance(y0, x0, y1, x1)
 
 			append_pair(pairs_file, x0, y0, x1, y1)
+			append_distance(distances_file, distance)
 			fmt.printfln("\t{{x0: %v, y0: %v, x1: %v, y1: %v}},", x0, y0, x1, y1)
-			append(&distances, haversine.distance(y0, x0, y1, x1))
+			append(&distances, distance)
 		}
 	}
 	fmt.println("]")
