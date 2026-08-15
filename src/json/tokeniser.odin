@@ -87,10 +87,40 @@ tokeniser_next :: proc(tokeniser: ^Tokeniser) -> Token {
 		return Token{kind = .Colon, lexeme = ":", offset = token_offset}
 	case ',':
 		return Token{kind = .Comma, lexeme = ",", offset = token_offset}
+	case '"':
+		return tokeniser_scan_string(tokeniser, token_offset)
 	case '-', '0'..='9':
 		return tokeniser_scan_number(tokeniser, token_offset, character)
 	case:
 		return Token{kind = .Invalid, offset = token_offset}
+	}
+}
+
+tokeniser_scan_string :: proc(tokeniser: ^Tokeniser, token_offset: int) -> Token {
+	clear(&tokeniser.token_buffer)
+	append(&tokeniser.token_buffer, byte('"'))
+
+	kind := Token_Kind.Invalid
+	for {
+		character, available, read_error := tokeniser_peek(tokeniser)
+		if read_error != nil || !available {
+			break
+		}
+
+		append(&tokeniser.token_buffer, tokeniser_advance(tokeniser))
+		if character == '"' {
+			kind = .String
+			break
+		}
+		if character == '\\' || character < 0x20 {
+			break
+		}
+	}
+
+	return Token {
+		kind = kind,
+		lexeme = string(tokeniser.token_buffer[:]),
+		offset = token_offset,
 	}
 }
 
