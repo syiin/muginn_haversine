@@ -7,6 +7,8 @@ import "core:os"
 import "../../src/fuzzer"
 import "../../src/haversine"
 
+PAIRS_PATH :: "pairs.json"
+
 Options :: struct {
 	seed:             u64 `args:"required" usage:"Seed for the random number generator."`,
 	number_of_points: u64 `args:"required" usage:"Number of random coordinate pairs to generate."`,
@@ -22,6 +24,30 @@ random_bounds :: proc(randomizer: ^fuzzer.Fuzzer, low, high: f64) -> (f64, f64) 
 	return min(bound_0, bound_1), max(bound_0, bound_1)
 }
 
+open_pairs_file :: proc() -> ^os.File {
+	pairs_file, open_error := os.open(
+		PAIRS_PATH,
+		{.Write, .Append, .Create},
+		os.Permissions_Default_File,
+	)
+	if open_error != nil {
+		fmt.eprintfln("Could not open %q: %v", PAIRS_PATH, open_error)
+		os.exit(1)
+	}
+	return pairs_file
+}
+
+append_pair :: proc(pairs_file: ^os.File, x0, y0, x1, y1: f64) {
+	fmt.wprintfln(
+		os.to_stream(pairs_file),
+		"{{\"x0\":%v,\"y0\":%v,\"x1\":%v,\"y1\":%v}}",
+		x0,
+		y0,
+		x1,
+		y1,
+	)
+}
+
 main :: proc() {
 	options: Options
 	flags.parse_or_exit(&options, os.args, .Unix)
@@ -35,6 +61,9 @@ main :: proc() {
 		os.exit(1)
 	}
 	pairs_per_cluster := options.number_of_points / options.n_clusters
+
+	pairs_file := open_pairs_file()
+	defer os.close(pairs_file)
 
 	randomizer: fuzzer.Fuzzer
 	fuzzer.init(&randomizer, options.seed)
@@ -53,6 +82,7 @@ main :: proc() {
 			x1 := fuzzer.random_number(&randomizer, x_low, x_high)
 			y1 := fuzzer.random_number(&randomizer, y_low, y_high)
 
+			append_pair(pairs_file, x0, y0, x1, y1)
 			fmt.printfln("\t{{x0: %v, y0: %v, x1: %v, y1: %v}},", x0, y0, x1, y1)
 			append(&distances, haversine.distance(y0, x0, y1, x1))
 		}
