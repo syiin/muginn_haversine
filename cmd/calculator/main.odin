@@ -14,6 +14,9 @@ Options :: struct {
 	distance_file_path: string `usage:"Optional path to little-endian f64 reference distances."`,
 }
 
+DISTANCE_SIZE :: size_of(f64)
+DISTANCE_READ_BUFFER_SIZE :: 64 * 1024
+
 object_number :: proc(object: json.Object, key: string) -> (f64, bool) {
 	value, found := object[key]
 	if !found {
@@ -59,26 +62,49 @@ calculate_average_distance :: proc(value: json.Value) -> (f64, bool) {
 }
 
 read_average_distance :: proc(file_path: string) -> (f64, bool) {
-	data, read_error := os.read_entire_file(file_path, context.allocator)
-	if read_error != nil {
+	file, open_error := os.open(file_path)
+	if open_error != nil {
 		return 0, false
 	}
-	defer delete(data)
+	defer os.close(file)
 
-	distance_size := size_of(f64)
-	if len(data) == 0 || len(data) % distance_size != 0 {
-		return 0, false
-	}
-
+	buffer: [DISTANCE_READ_BUFFER_SIZE + DISTANCE_SIZE - 1]byte
+	remaining := 0
 	total_distance: f64
-	for offset := 0; offset < len(data); offset += distance_size {
-		distance, ok := endian.get_f64(data[offset:], .Little)
-		if !ok {
+	distance_count := 0
+	for {
+		bytes_read, read_error := os.read(
+			file,
+			buffer[remaining:remaining + DISTANCE_READ_BUFFER_SIZE],
+		)
+		buffered := remaining + bytes_read
+		complete_bytes := buffered - buffered % DISTANCE_SIZE
+		for offset := 0; offset < complete_bytes; offset += DISTANCE_SIZE {
+			distance, ok := endian.get_f64(buffer[offset:offset + DISTANCE_SIZE], .Little)
+			if !ok {
+				return 0, false
+			}
+			total_distance += distance
+			distance_count += 1
+		}
+
+		remaining = buffered - complete_bytes
+		copy(buffer[:remaining], buffer[complete_bytes:buffered])
+		if read_error != nil {
+			if read_error != .EOF {
+				return 0, false
+			}
+			break
+		}
+		if bytes_read == 0 {
 			return 0, false
 		}
-		total_distance += distance
 	}
-	return total_distance / f64(len(data) / distance_size), true
+
+	if remaining != 0 || distance_count == 0 {
+		return 0, false
+	}
+	return total_distance / f64(distance_count), true
 }
 
 main :: proc() {
