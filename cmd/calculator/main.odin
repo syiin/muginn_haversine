@@ -61,6 +61,18 @@ calculate_average_distance :: proc(value: json.Value) -> (f64, bool) {
 	return total_distance / f64(len(pairs)), true
 }
 
+accumulate_distances :: proc(data: []byte, total: ^f64, count: ^int) -> bool {
+	for offset := 0; offset < len(data); offset += DISTANCE_SIZE {
+		distance, ok := endian.get_f64(data[offset:offset + DISTANCE_SIZE], .Little)
+		if !ok {
+			return false
+		}
+		total^ += distance
+		count^ += 1
+	}
+	return true
+}
+
 read_average_distance :: proc(file_path: string) -> (f64, bool) {
 	file, open_error := os.open(file_path)
 	if open_error != nil {
@@ -79,24 +91,16 @@ read_average_distance :: proc(file_path: string) -> (f64, bool) {
 		)
 		buffered := remaining + bytes_read
 		complete_bytes := buffered - buffered % DISTANCE_SIZE
-		for offset := 0; offset < complete_bytes; offset += DISTANCE_SIZE {
-			distance, ok := endian.get_f64(buffer[offset:offset + DISTANCE_SIZE], .Little)
-			if !ok {
-				return 0, false
-			}
-			total_distance += distance
-			distance_count += 1
+		if !accumulate_distances(buffer[:complete_bytes], &total_distance, &distance_count) {
+			return 0, false
 		}
 
 		remaining = buffered - complete_bytes
 		copy(buffer[:remaining], buffer[complete_bytes:buffered])
-		if read_error != nil {
-			if read_error != .EOF {
-				return 0, false
-			}
+		if read_error == .EOF {
 			break
 		}
-		if bytes_read == 0 {
+		if read_error != nil || bytes_read == 0 {
 			return 0, false
 		}
 	}
