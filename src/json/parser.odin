@@ -90,8 +90,18 @@ parser_parse :: proc(parser: ^Parser) {
 				values = make(Object),
 			}
 			append(&parser.stack, Frame(frame))
+		case .Left_Bracket:
+			frame := Array_Frame {
+				state = .Expect_First_Value_Or_End,
+				values = make(Array),
+			}
+			append(&parser.stack, Frame(frame))
 		case .Right_Brace:
 			if !parser_handle_right_brace(parser) {
+				return
+			}
+		case .Right_Bracket:
+			if !parser_handle_right_bracket(parser) {
 				return
 			}
 		case .String:
@@ -155,6 +165,35 @@ parser_handle_right_brace :: proc(parser: ^Parser) -> bool {
 			return false
 		}
 	case Array_Frame:
+		return false
+	}
+	return true
+}
+
+parser_handle_right_bracket :: proc(parser: ^Parser) -> bool {
+	top := parser_stack_top(parser)
+	if top == nil {
+		return false
+	}
+
+	switch frame in top^ {
+	case Array_Frame:
+		if frame.state != .Expect_First_Value_Or_End && frame.state != .Expect_Comma_Or_End {
+			return false
+		}
+	case Object_Frame:
+		return false
+	}
+
+	completed := pop(&parser.stack)
+	switch frame in completed {
+	case Array_Frame:
+		value := Value(frame.values)
+		if !parser_attach_value(parser, value) {
+			parser_destroy_value(value)
+			return false
+		}
+	case Object_Frame:
 		return false
 	}
 	return true
