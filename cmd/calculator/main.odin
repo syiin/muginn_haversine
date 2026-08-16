@@ -1,7 +1,16 @@
 package main
 
-import "core:fmt"
+import "core:flags"
+import "core:os"
+
+import "../../src/json"
+
+Options :: struct {
+	file_path:        string `args:"required" usage:"Path to the input JSON file."`,
+	output_file_path: string `args:"required" usage:"Path to the output file."`,
+}
 
 main :: proc() {
-	fmt.println("Hello, world!")
+	options: Options
+	flags.parse_or_exit(&options, os.args, .Unix)
 }
