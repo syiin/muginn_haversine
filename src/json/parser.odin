@@ -104,6 +104,14 @@ parser_parse :: proc(parser: ^Parser) {
 			if !parser_handle_right_bracket(parser) {
 				return
 			}
+		case .Colon:
+			if !parser_handle_colon(parser_stack_top(parser)) {
+				return
+			}
+		case .Comma:
+			if !parser_handle_comma(parser_stack_top(parser)) {
+				return
+			}
 		case .String:
 			if !parser_handle_string(parser_stack_top(parser), token) {
 					return
@@ -118,6 +126,41 @@ parser_stack_top :: proc(parser: ^Parser) -> ^Frame {
 		return nil
 	}
 	return &parser.stack[len(parser.stack)-1]
+}
+
+parser_handle_colon :: proc(frame: ^Frame) -> bool {
+	if frame == nil {
+		return false
+	}
+	switch &value in frame^ {
+	case Object_Frame:
+		if value.state != .Expect_Colon {
+			return false
+		}
+		value.state = .Expect_Value
+	case Array_Frame:
+		return false
+	}
+	return true
+}
+
+parser_handle_comma :: proc(frame: ^Frame) -> bool {
+	if frame == nil {
+		return false
+	}
+	switch &value in frame^ {
+	case Object_Frame:
+		if value.state != .Expect_Comma_Or_End {
+			return false
+		}
+		value.state = .Expect_Key
+	case Array_Frame:
+		if value.state != .Expect_Comma_Or_End {
+			return false
+		}
+		value.state = .Expect_Value
+	}
+	return true
 }
 
 parser_handle_string :: proc(frame: ^Frame, token: Token) -> bool {
