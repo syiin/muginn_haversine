@@ -26,10 +26,10 @@ random_bounds :: proc(randomizer: ^fuzzer.Fuzzer, low, high: f64) -> (f64, f64) 
 	return min(bound_0, bound_1), max(bound_0, bound_1)
 }
 
-open_append_file :: proc(path: string) -> ^os.File {
+open_file :: proc(path: string, flags: os.File_Flags) -> ^os.File {
 	file, open_error := os.open(
 		path,
-		{.Write, .Append, .Create},
+		flags,
 		os.Permissions_Default_File,
 	)
 	if open_error != nil {
@@ -39,9 +39,9 @@ open_append_file :: proc(path: string) -> ^os.File {
 	return file
 }
 
-append_pair :: proc(pairs_file: ^os.File, x0, y0, x1, y1: f64) {
-	fmt.wprintfln(
-		os.to_stream(pairs_file),
+append_pair :: proc(pairs_stream: io.Stream, x0, y0, x1, y1: f64) {
+	fmt.wprintf(
+		pairs_stream,
 		"{{\"x0\":%v,\"y0\":%v,\"x1\":%v,\"y1\":%v}}",
 		x0,
 		y0,
@@ -74,9 +74,10 @@ main :: proc() {
 	}
 	pairs_per_cluster := options.number_of_points / options.n_clusters
 
-	pairs_file := open_append_file(PAIRS_PATH)
+	pairs_file := open_file(PAIRS_PATH, {.Write, .Trunc, .Create})
 	defer os.close(pairs_file)
-	distances_file := open_append_file(DISTANCES_PATH)
+	pairs_stream := os.to_stream(pairs_file)
+	distances_file := open_file(DISTANCES_PATH, {.Write, .Append, .Create})
 	defer os.close(distances_file)
 
 	randomizer: fuzzer.Fuzzer
@@ -85,6 +86,8 @@ main :: proc() {
 	distances: [dynamic]f64
 	defer delete(distances)
 
+	fmt.wprint(pairs_stream, "{\"pairs\":[")
+	pair_index := 0
 	fmt.println("Pairs: [")
 	for _ in 0 ..< options.n_clusters {
 		x_low, x_high := random_bounds(&randomizer, -180, 180)
@@ -97,12 +100,17 @@ main :: proc() {
 			y1 := fuzzer.random_number(&randomizer, y_low, y_high)
 			distance := haversine.distance(y0, x0, y1, x1)
 
-			append_pair(pairs_file, x0, y0, x1, y1)
+			if pair_index > 0 {
+				fmt.wprint(pairs_stream, ",")
+			}
+			append_pair(pairs_stream, x0, y0, x1, y1)
+			pair_index += 1
 			append_distance(distances_file, distance)
 			fmt.printfln("\t{{x0: %v, y0: %v, x1: %v, y1: %v}},", x0, y0, x1, y1)
 			append(&distances, distance)
 		}
 	}
+	fmt.wprintln(pairs_stream, "]}")
 	fmt.println("]")
 
 	fmt.println("Distances: [")
