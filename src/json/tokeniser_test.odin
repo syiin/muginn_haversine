@@ -103,3 +103,51 @@ tokeniser_string_leaves_delimiter_test :: proc(t: ^testing.T) {
 	testing.expect_value(t, delimiter.kind, Token_Kind.Comma)
 	testing.expect_value(t, delimiter.offset, 7)
 }
+
+@(test)
+tokeniser_whitespace_test :: proc(t: ^testing.T) {
+	tokeniser := test_tokeniser(" \t\n\r{")
+
+	token := tokeniser_next(&tokeniser)
+	testing.expect_value(t, token.kind, Token_Kind.Left_Brace)
+	testing.expect_value(t, token.offset, 4)
+
+	whitespace_only := test_tokeniser(" \t\n\r")
+	token = tokeniser_next(&whitespace_only)
+	testing.expect_value(t, token.kind, Token_Kind.EOF)
+	testing.expect_value(t, token.offset, 4)
+}
+
+@(test)
+tokeniser_literal_test :: proc(t: ^testing.T) {
+	tokeniser := test_tokeniser("true false null")
+	defer delete(tokeniser.token_buffer)
+
+	true_token := tokeniser_next(&tokeniser)
+	testing.expect_value(t, true_token.kind, Token_Kind.True)
+	testing.expect_value(t, true_token.lexeme, "true")
+	testing.expect_value(t, true_token.offset, 0)
+
+	false_token := tokeniser_next(&tokeniser)
+	testing.expect_value(t, false_token.kind, Token_Kind.False)
+	testing.expect_value(t, false_token.lexeme, "false")
+	testing.expect_value(t, false_token.offset, 5)
+
+	null_token := tokeniser_next(&tokeniser)
+	testing.expect_value(t, null_token.kind, Token_Kind.Null)
+	testing.expect_value(t, null_token.lexeme, "null")
+	testing.expect_value(t, null_token.offset, 11)
+
+	invalid_literals := []string {
+		"tru",
+		"fals",
+		"nul",
+		"tx",
+	}
+	for value in invalid_literals {
+		invalid_tokeniser := test_tokeniser(value)
+		token := tokeniser_next(&invalid_tokeniser)
+		testing.expect_value(t, token.kind, Token_Kind.Invalid)
+		delete(invalid_tokeniser.token_buffer)
+	}
+}

@@ -63,6 +63,10 @@ tokeniser_destroy :: proc(tokeniser: ^Tokeniser) {
 
 @(require_results)
 tokeniser_next :: proc(tokeniser: ^Tokeniser) -> Token {
+	if tokeniser_skip_whitespace(tokeniser) != nil {
+		return Token{kind = .Invalid, offset = tokeniser.offset}
+	}
+
 	character, available, read_error := tokeniser_peek(tokeniser)
 	if read_error != nil {
 		return Token{kind = .Invalid, offset = tokeniser.offset}
@@ -89,10 +93,60 @@ tokeniser_next :: proc(tokeniser: ^Tokeniser) -> Token {
 		return Token{kind = .Comma, lexeme = ",", offset = token_offset}
 	case '"':
 		return tokeniser_scan_string(tokeniser, token_offset)
+	case 't':
+		return tokeniser_scan_literal(tokeniser, token_offset, "true", .True)
+	case 'f':
+		return tokeniser_scan_literal(tokeniser, token_offset, "false", .False)
+	case 'n':
+		return tokeniser_scan_literal(tokeniser, token_offset, "null", .Null)
 	case '-', '0'..='9':
 		return tokeniser_scan_number(tokeniser, token_offset, character)
 	case:
 		return Token{kind = .Invalid, offset = token_offset}
+	}
+}
+
+tokeniser_skip_whitespace :: proc(tokeniser: ^Tokeniser) -> os.Error {
+	for {
+		character, available, read_error := tokeniser_peek(tokeniser)
+		if read_error != nil || !available {
+			return read_error
+		}
+
+		switch character {
+		case ' ', '\t', '\n', '\r':
+			tokeniser_advance(tokeniser)
+		case:
+			return nil
+		}
+	}
+}
+
+tokeniser_scan_literal :: proc(
+	tokeniser: ^Tokeniser,
+	token_offset: int,
+	expected: string,
+	kind: Token_Kind,
+) -> Token {
+	clear(&tokeniser.token_buffer)
+	append(&tokeniser.token_buffer, expected[0])
+
+	for index in 1 ..< len(expected) {
+		character, available, read_error := tokeniser_peek(tokeniser)
+		if read_error != nil || !available || character != expected[index] {
+			return Token {
+				kind = .Invalid,
+				lexeme = string(tokeniser.token_buffer[:]),
+				offset = token_offset,
+			}
+		}
+		append(&tokeniser.token_buffer, tokeniser_advance(tokeniser))
+	}
+
+	return Token {
+		kind = kind,
+		lexeme = string(tokeniser.token_buffer[:]),
+		offset = token_offset,
 	}
 }
 
