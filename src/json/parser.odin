@@ -2,6 +2,7 @@
 package json
 
 import "core:strings"
+import "core:strconv"
 
 Null   :: distinct rawptr
 Number :: f64
@@ -113,11 +114,14 @@ parser_parse :: proc(parser: ^Parser) {
 				return
 			}
 		case .String:
-			if !parser_handle_string(parser_stack_top(parser), token) {
-					return
+			if !parser_handle_string(parser, token) {
+				return
+			}
+		case .Number, .True, .False, .Null:
+			if !parser_handle_scalar(parser, token) {
+				return
 			}
 		}
-		// Token parsing will be implemented separately.
 	}
 }
 
@@ -163,25 +167,53 @@ parser_handle_comma :: proc(frame: ^Frame) -> bool {
 	return true
 }
 
-parser_handle_string :: proc(frame: ^Frame, token: Token) -> bool {
-	if frame == nil {
+parser_handle_string :: proc(parser: ^Parser, token: Token) -> bool {
+	top := parser_stack_top(parser)
+	if top != nil {
+		switch &frame in top^ {
+		case Object_Frame:
+			if frame.state == .Expect_First_Key_Or_End || frame.state == .Expect_Key {
+				key, clone_error := strings.clone(token.lexeme[1:len(token.lexeme)-1])
+				if clone_error != nil {
+					return false
+				}
+				frame.pending_key = key
+				frame.state = .Expect_Colon
+				return true
+			}
+		case Array_Frame:
+		}
+	}
+
+	string_value, clone_error := strings.clone(token.lexeme[1:len(token.lexeme)-1])
+	if clone_error != nil {
 		return false
 	}
-	switch &value in frame^ {
-	case Object_Frame:
-		if value.state != .Expect_First_Key_Or_End && value.state != .Expect_Key {
-			return false
-		}
-		key, clone_error := strings.clone(token.lexeme[1:len(token.lexeme)-1])
-		if clone_error != nil {
-			return false
-		}
-		value.pending_key = key
-		value.state = .Expect_Colon
-	case Array_Frame:
+	value := Value(String(string_value))
+	if !parser_attach_value(parser, value) {
+		parser_destroy_value(value)
 		return false
 	}
 	return true
+}
+
+parser_handle_scalar :: proc(parser: ^Parser, token: Token) -> bool {
+	#partial switch token.kind {
+	case .Number:
+		value, ok := strconv.parse_f64(token.lexeme)
+		if !ok {
+			return false
+		}
+		return parser_attach_value(parser, Value(Number(value)))
+	case .True:
+		return parser_attach_value(parser, Value(true))
+	case .False:
+		return parser_attach_value(parser, Value(false))
+	case .Null:
+		return parser_attach_value(parser, Value(Null(nil)))
+	case:
+		return false
+	}
 }
 
 parser_handle_right_brace :: proc(parser: ^Parser) -> bool {
