@@ -1,5 +1,6 @@
 package json
 
+import "core:os"
 import "core:testing"
 
 @(test)
@@ -220,4 +221,81 @@ parser_completes_empty_array_test :: proc(t: ^testing.T) {
 		testing.expect_value(t, len(value), 0)
 	}
 	testing.expect(t, is_array, "Expected an array result")
+}
+
+@(test)
+parser_reports_errors_test :: proc(t: ^testing.T) {
+	tests := []struct {
+		input:  string,
+		kind:   Error_Kind,
+		offset: int,
+	} {
+		{"", .Unexpected_EOF, 0},
+		{"[true", .Unexpected_EOF, 5},
+		{"[true false]", .Unexpected_Token, 6},
+		{"true false", .Trailing_Data, 5},
+		{"@", .Unexpected_Token, 0},
+		{"\"unterminated", .Unexpected_EOF, 0},
+	}
+
+	for test in tests {
+		parser: Parser
+		parser.tokeniser = test_tokeniser(test.input)
+
+		err := parser_parse(&parser)
+
+		testing.expect_value(t, err.kind, test.kind)
+		testing.expect_value(t, err.offset, test.offset)
+		parser_destroy(&parser)
+	}
+}
+
+@(test)
+parse_returns_owned_value_test :: proc(t: ^testing.T) {
+	file, create_error := os.create_temp_file("", "muginn-json-*.json")
+	testing.expect(t, create_error == nil, "Expected to create a temporary file")
+	if create_error != nil {
+		return
+	}
+
+	file_info, stat_error := os.fstat(file, context.allocator)
+	testing.expect(t, stat_error == nil, "Expected to inspect the temporary file")
+	if stat_error != nil {
+		os.close(file)
+		return
+	}
+	defer os.file_info_delete(file_info, context.allocator)
+	defer os.remove(file_info.fullpath)
+
+	_, write_error := os.write_string(file, "{\"name\":\"muginn\"}")
+	close_error := os.close(file)
+	testing.expect(t, write_error == nil, "Expected to write the temporary file")
+	testing.expect(t, close_error == nil, "Expected to close the temporary file")
+	if write_error != nil || close_error != nil {
+		return
+	}
+
+	value, err := parse(file_info.fullpath)
+	testing.expect_value(t, err.kind, Error_Kind.None)
+	if err.kind != .None {
+		return
+	}
+	defer destroy(value)
+
+	object, is_object := value.(Object)
+	testing.expect(t, is_object, "Expected an object result")
+	if !is_object {
+		return
+	}
+	name, found := object["name"]
+	testing.expect(t, found, "Expected the name key")
+	string_value, is_string := name.(String)
+	testing.expect(t, is_string, "Expected a string value")
+	testing.expect_value(t, string_value, String("muginn"))
+}
+
+@(test)
+parse_reports_open_file_error_test :: proc(t: ^testing.T) {
+	_, err := parse("")
+	testing.expect_value(t, err.kind, Error_Kind.Open_File)
 }

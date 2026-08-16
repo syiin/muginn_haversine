@@ -4,21 +4,6 @@ package json
 import "core:strings"
 import "core:strconv"
 
-Null   :: distinct rawptr
-Number :: f64
-String :: string
-Array  :: distinct [dynamic]Value
-Object :: distinct map[string]Value
-
-Value :: union {
-	Null,
-	Number,
-	bool,
-	String,
-	Array,
-	Object,
-}
-
 Array_State :: enum {
 	Expect_First_Value_Or_End,
 	Expect_Value,
@@ -56,8 +41,8 @@ Parser :: struct {
 	has_result: bool,
 }
 
-parser_init :: proc(parser: ^Parser, file_path: string) -> bool {
-	return tokeniser_init(&parser.tokeniser, file_path) == nil
+parser_init :: proc(parser: ^Parser, file_path: string) -> Error {
+	return tokeniser_init(&parser.tokeniser, file_path)
 }
 
 parser_destroy :: proc(parser: ^Parser) {
@@ -79,12 +64,25 @@ parser_destroy :: proc(parser: ^Parser) {
 	}
 }
 
-parser_parse :: proc(parser: ^Parser) {
+parser_parse :: proc(parser: ^Parser) -> Error {
 	for {
 		token := tokeniser_next(&parser.tokeniser)
+		if parser.has_result && len(parser.stack) == 0 && token.kind != .EOF {
+			return Error{kind = .Trailing_Data, offset = token.offset}
+		}
+
 		#partial switch token.kind {
-		case .EOF, .Invalid:
-			return
+		case .EOF:
+			if !parser.has_result || len(parser.stack) != 0 {
+				return Error{kind = .Unexpected_EOF, offset = token.offset}
+			}
+			return {}
+		case .Invalid:
+			kind := token.error_kind
+			if kind == .None {
+				kind = .Unexpected_Token
+			}
+			return Error{kind = kind, offset = token.offset}
 		case .Left_Brace:
 			frame := Object_Frame {
 				state = .Expect_First_Key_Or_End,
@@ -99,27 +97,27 @@ parser_parse :: proc(parser: ^Parser) {
 			append(&parser.stack, Frame(frame))
 		case .Right_Brace:
 			if !parser_handle_right_brace(parser) {
-				return
+				return Error{kind = .Unexpected_Token, offset = token.offset}
 			}
 		case .Right_Bracket:
 			if !parser_handle_right_bracket(parser) {
-				return
+				return Error{kind = .Unexpected_Token, offset = token.offset}
 			}
 		case .Colon:
 			if !parser_handle_colon(parser_stack_top(parser)) {
-				return
+				return Error{kind = .Unexpected_Token, offset = token.offset}
 			}
 		case .Comma:
 			if !parser_handle_comma(parser_stack_top(parser)) {
-				return
+				return Error{kind = .Unexpected_Token, offset = token.offset}
 			}
 		case .String:
 			if !parser_handle_string(parser, token) {
-				return
+				return Error{kind = .Unexpected_Token, offset = token.offset}
 			}
 		case .Number, .True, .False, .Null:
 			if !parser_handle_scalar(parser, token) {
-				return
+				return Error{kind = .Unexpected_Token, offset = token.offset}
 			}
 		}
 	}

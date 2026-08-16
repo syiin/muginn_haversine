@@ -22,9 +22,10 @@ Token_Kind :: enum {
 }
 
 Token :: struct {
-	kind:   Token_Kind,
-	lexeme: string,
-	offset: int,
+	kind:       Token_Kind,
+	lexeme:     string,
+	offset:     int,
+	error_kind: Error_Kind,
 }
 
 Tokeniser :: struct {
@@ -38,10 +39,10 @@ Tokeniser :: struct {
 	reached_end_of_file: bool,
 }
 
-tokeniser_init :: proc(tokeniser: ^Tokeniser, file_path: string) -> os.Error {
+tokeniser_init :: proc(tokeniser: ^Tokeniser, file_path: string) -> Error {
 	file, open_error := os.open(file_path)
 	if open_error != nil {
-		return open_error
+		return Error{kind = .Open_File}
 	}
 
 	tokeniser^ = Tokeniser {
@@ -52,8 +53,9 @@ tokeniser_init :: proc(tokeniser: ^Tokeniser, file_path: string) -> os.Error {
 	if read_error != nil {
 		os.close(file)
 		tokeniser.file = nil
+		return Error{kind = .Read_File, offset = tokeniser.offset}
 	}
-	return read_error
+	return {}
 }
 
 tokeniser_destroy :: proc(tokeniser: ^Tokeniser) {
@@ -64,12 +66,20 @@ tokeniser_destroy :: proc(tokeniser: ^Tokeniser) {
 @(require_results)
 tokeniser_next :: proc(tokeniser: ^Tokeniser) -> Token {
 	if tokeniser_skip_whitespace(tokeniser) != nil {
-		return Token{kind = .Invalid, offset = tokeniser.offset}
+		return Token {
+			kind = .Invalid,
+			offset = tokeniser.offset,
+			error_kind = .Read_File,
+		}
 	}
 
 	character, available, read_error := tokeniser_peek(tokeniser)
 	if read_error != nil {
-		return Token{kind = .Invalid, offset = tokeniser.offset}
+		return Token {
+			kind = .Invalid,
+			offset = tokeniser.offset,
+			error_kind = .Read_File,
+		}
 	}
 	if !available {
 		return Token{kind = .EOF, offset = tokeniser.offset}
@@ -102,7 +112,11 @@ tokeniser_next :: proc(tokeniser: ^Tokeniser) -> Token {
 	case '-', '0'..='9':
 		return tokeniser_scan_number(tokeniser, token_offset, character)
 	case:
-		return Token{kind = .Invalid, offset = token_offset}
+		return Token {
+			kind = .Invalid,
+			offset = token_offset,
+			error_kind = .Unexpected_Token,
+		}
 	}
 }
 
@@ -133,11 +147,20 @@ tokeniser_scan_literal :: proc(
 
 	for index in 1 ..< len(expected) {
 		character, available, read_error := tokeniser_peek(tokeniser)
-		if read_error != nil || !available || character != expected[index] {
+		if read_error != nil {
 			return Token {
 				kind = .Invalid,
 				lexeme = string(tokeniser.token_buffer[:]),
 				offset = token_offset,
+				error_kind = .Read_File,
+			}
+		}
+		if !available || character != expected[index] {
+			return Token {
+				kind = .Invalid,
+				lexeme = string(tokeniser.token_buffer[:]),
+				offset = token_offset,
+				error_kind = .Unexpected_EOF if !available else .Unexpected_Token,
 			}
 		}
 		append(&tokeniser.token_buffer, tokeniser_advance(tokeniser))
@@ -155,9 +178,15 @@ tokeniser_scan_string :: proc(tokeniser: ^Tokeniser, token_offset: int) -> Token
 	append(&tokeniser.token_buffer, byte('"'))
 
 	kind := Token_Kind.Invalid
+	error_kind := Error_Kind.None
 	for {
 		character, available, read_error := tokeniser_peek(tokeniser)
-		if read_error != nil || !available {
+		if read_error != nil {
+			error_kind = .Read_File
+			break
+		}
+		if !available {
+			error_kind = .Unexpected_EOF
 			break
 		}
 
@@ -167,6 +196,7 @@ tokeniser_scan_string :: proc(tokeniser: ^Tokeniser, token_offset: int) -> Token
 			break
 		}
 		if character == '\\' || character < 0x20 {
+			error_kind = .Unexpected_Token
 			break
 		}
 	}
@@ -175,6 +205,7 @@ tokeniser_scan_string :: proc(tokeniser: ^Tokeniser, token_offset: int) -> Token
 		kind = kind,
 		lexeme = string(tokeniser.token_buffer[:]),
 		offset = token_offset,
+		error_kind = error_kind,
 	}
 }
 
@@ -190,8 +221,15 @@ tokeniser_scan_number :: proc(
 	first_digit := first_character
 	if first_character == '-' {
 		character, available, read_error := tokeniser_peek(tokeniser)
-		if read_error != nil || !available || character < '0' || character > '9' {
-			return tokeniser_number_token(tokeniser, token_offset, false)
+		if read_error != nil {
+			return tokeniser_number_token(tokeniser, token_offset, .Read_File)
+		}
+		if !available || character < '0' || character > '9' {
+			return tokeniser_number_token(
+				tokeniser,
+				token_offset,
+				.Unexpected_EOF if !available else .Unexpected_Token,
+			)
 		}
 		first_digit = tokeniser_advance(tokeniser)
 		append(&tokeniser.token_buffer, first_digit)
@@ -201,62 +239,75 @@ tokeniser_scan_number :: proc(
 	if first_digit == '0' {
 		character, available, read_error := tokeniser_peek(tokeniser)
 		if read_error != nil {
-			return tokeniser_number_token(tokeniser, token_offset, false)
+			return tokeniser_number_token(tokeniser, token_offset, .Read_File)
 		}
 		if available && '0' <= character && character <= '9' {
 			append(&tokeniser.token_buffer, tokeniser_advance(tokeniser))
-			return tokeniser_number_token(tokeniser, token_offset, false)
+			return tokeniser_number_token(tokeniser, token_offset, .Unexpected_Token)
 		}
 	} else if tokeniser_consume_digits(tokeniser) != nil {
-		return tokeniser_number_token(tokeniser, token_offset, false)
+		return tokeniser_number_token(tokeniser, token_offset, .Read_File)
 	}
 
 	character, available, read_error := tokeniser_peek(tokeniser)
 	if read_error != nil {
-		return tokeniser_number_token(tokeniser, token_offset, false)
+		return tokeniser_number_token(tokeniser, token_offset, .Read_File)
 	}
 	// Handle fractional digits.
 	if available && character == '.' {
 		append(&tokeniser.token_buffer, tokeniser_advance(tokeniser))
 
 		character, available, read_error = tokeniser_peek(tokeniser)
-		if read_error != nil || !available || character < '0' || character > '9' {
-			return tokeniser_number_token(tokeniser, token_offset, false)
+		if read_error != nil {
+			return tokeniser_number_token(tokeniser, token_offset, .Read_File)
+		}
+		if !available || character < '0' || character > '9' {
+			return tokeniser_number_token(
+				tokeniser,
+				token_offset,
+				.Unexpected_EOF if !available else .Unexpected_Token,
+			)
 		}
 		if tokeniser_consume_digits(tokeniser) != nil {
-			return tokeniser_number_token(tokeniser, token_offset, false)
+			return tokeniser_number_token(tokeniser, token_offset, .Read_File)
 		}
 	}
 
 	character, available, read_error = tokeniser_peek(tokeniser)
 	if read_error != nil {
-		return tokeniser_number_token(tokeniser, token_offset, false)
+		return tokeniser_number_token(tokeniser, token_offset, .Read_File)
 	}
 	// Handle exponentials.
 	if available && (character == 'e' || character == 'E') {
 		append(&tokeniser.token_buffer, tokeniser_advance(tokeniser))
 
 		character, available, read_error = tokeniser_peek(tokeniser)
-		if read_error != nil || !available {
-			return tokeniser_number_token(tokeniser, token_offset, false)
+		if read_error != nil {
+			return tokeniser_number_token(tokeniser, token_offset, .Read_File)
+		}
+		if !available {
+			return tokeniser_number_token(tokeniser, token_offset, .Unexpected_EOF)
 		}
 		// Handle an optional exponent sign.
 		if character == '+' || character == '-' {
 			append(&tokeniser.token_buffer, tokeniser_advance(tokeniser))
 			character, available, read_error = tokeniser_peek(tokeniser)
-			if read_error != nil || !available {
-				return tokeniser_number_token(tokeniser, token_offset, false)
+			if read_error != nil {
+				return tokeniser_number_token(tokeniser, token_offset, .Read_File)
+			}
+			if !available {
+				return tokeniser_number_token(tokeniser, token_offset, .Unexpected_EOF)
 			}
 		}
 		if character < '0' || character > '9' {
-			return tokeniser_number_token(tokeniser, token_offset, false)
+			return tokeniser_number_token(tokeniser, token_offset, .Unexpected_Token)
 		}
 		if tokeniser_consume_digits(tokeniser) != nil {
-			return tokeniser_number_token(tokeniser, token_offset, false)
+			return tokeniser_number_token(tokeniser, token_offset, .Read_File)
 		}
 	}
 
-	return tokeniser_number_token(tokeniser, token_offset, true)
+	return tokeniser_number_token(tokeniser, token_offset, .None)
 }
 
 tokeniser_consume_digits :: proc(tokeniser: ^Tokeniser) -> os.Error {
@@ -272,12 +323,13 @@ tokeniser_consume_digits :: proc(tokeniser: ^Tokeniser) -> os.Error {
 tokeniser_number_token :: proc(
 	tokeniser: ^Tokeniser,
 	token_offset: int,
-	valid: bool,
+	error_kind: Error_Kind,
 ) -> Token {
 	return Token {
-		kind = .Number if valid else .Invalid,
+		kind = .Number if error_kind == .None else .Invalid,
 		lexeme = string(tokeniser.token_buffer[:]),
 		offset = token_offset,
+		error_kind = error_kind,
 	}
 }
 
