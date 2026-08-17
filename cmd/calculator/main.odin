@@ -7,6 +7,7 @@ import "core:os"
 
 import "../../src/haversine"
 import "../../src/json"
+import "../../src/profiling"
 
 Options :: struct {
 	file_path:          string `args:"required" usage:"Path to the input JSON file."`,
@@ -111,10 +112,19 @@ read_average_distance :: proc(file_path: string) -> (f64, bool) {
 	return total_distance / f64(distance_count), true
 }
 
+print_time_elapsed :: proc(label: string, total_elapsed: u64, begin: u64, end: u64) {
+	elapsed := end - begin
+	percent := 100.0 * f64(elapsed) / f64(total_elapsed)
+	fmt.printfln("%s: %d (%.2f%%)", label, elapsed, percent)
+}
+
 main :: proc() {
+	prof_begin := profiling.read_cpu_timer()
 	options: Options
+	prof_read := profiling.read_cpu_timer()
 	flags.parse_or_exit(&options, os.args, .Unix)
 
+	prof_parse := profiling.read_cpu_timer()
 	value, parse_error := json.parse(options.file_path)
 	if parse_error.kind != .None {
 		fmt.eprintfln(
@@ -127,13 +137,18 @@ main :: proc() {
 	}
 	defer json.destroy(value)
 
+	prof_sum := profiling.read_cpu_timer()
 	average_distance, valid := calculate_average_distance(value)
 	if !valid {
-		fmt.eprintfln("Expected %q to contain a non-empty array of coordinate pairs", options.file_path)
+		fmt.eprintfln(
+			"Expected %q to contain a non-empty array of coordinate pairs",
+			options.file_path,
+		)
 		os.exit(1)
 	}
 	fmt.printfln("Average distance: %v km", average_distance)
 
+	prof_check := profiling.read_cpu_timer()
 	if options.distance_file_path != "" {
 		reference_average, reference_valid := read_average_distance(options.distance_file_path)
 		if !reference_valid {
@@ -141,5 +156,30 @@ main :: proc() {
 			os.exit(1)
 		}
 		fmt.printfln("Distance delta: %v km", average_distance - reference_average)
+	}
+
+	prof_end := profiling.read_cpu_timer()
+	total_elapsed := prof_end - prof_begin
+	cpu_frequency := profiling.estimate_cpu_timer_frequency()
+	total_milliseconds := 1_000.0 * f64(total_elapsed) / f64(cpu_frequency)
+
+	fmt.printfln("Total time: %.4f ms (CPU frequency: %d)", total_milliseconds, cpu_frequency)
+
+	profile_labels := [?]string{"Startup", "Read", "Parse", "Sum", "Check"}
+	profile_timestamps := [?]u64{
+		prof_begin,
+		prof_read,
+		prof_parse,
+		prof_sum,
+		prof_check,
+		prof_end,
+	}
+	for label, index in profile_labels {
+		print_time_elapsed(
+			label,
+			total_elapsed,
+			profile_timestamps[index],
+			profile_timestamps[index + 1],
+		)
 	}
 }
