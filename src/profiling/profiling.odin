@@ -1,6 +1,7 @@
 package profiling
 
 import "base:intrinsics"
+import "core:fmt"
 import "core:time"
 
 #assert(
@@ -13,6 +14,21 @@ import "core:time"
 @(require_results)
 read_cpu_timer :: #force_inline proc "contextless" () -> u64 {
 	return u64(intrinsics.read_cycle_counter())
+}
+
+profile_block_end :: proc(label: string, start: u64) {
+	elapsed := read_cpu_timer() - start
+	fmt.printfln("%s: %d cycles", label, elapsed)
+}
+
+// Usage:
+// {
+//     profile_block("Parse")
+//     // Code to profile.
+// }
+@(deferred_in_out=profile_block_end)
+profile_block :: #force_inline proc(label: string) -> u64 {
+	return read_cpu_timer()
 }
 
 get_os_timer_frequency :: proc "contextless" () -> u64 {
