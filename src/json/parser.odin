@@ -4,6 +4,8 @@ package json
 import "core:strings"
 import "core:strconv"
 
+import "../profiling"
+
 Array_State :: enum {
 	Expect_First_Value_Or_End,
 	Expect_Value,
@@ -65,6 +67,8 @@ parser_destroy :: proc(parser: ^Parser) {
 }
 
 parser_parse :: proc(parser: ^Parser) -> Error {
+	profiling.profile_block("JSON parse loop")
+
 	for {
 		token := tokeniser_next(&parser.tokeniser)
 		if parser.has_result && len(parser.stack) == 0 && token.kind != .EOF {
