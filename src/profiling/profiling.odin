@@ -12,14 +12,17 @@ import "core:time"
 MAX_PROFILE_COUNT :: 64
 
 Profile :: struct {
-	label:          string,
-	elapsed_cycles: u64,
-	self_cycles:    u64,
-	hit_count:      u64,
+	label:           string,
+	elapsed_cycles:  u64, // Inclusive; nested invocations of the same label count once.
+	self_cycles:     u64,
+	hit_count:       u64, // Includes nested invocations of the same label.
+	outermost_count: u64,
 }
 
 Active_Block :: struct {
+	label:        string,
 	child_cycles: u64,
+	is_outermost: bool,
 }
 
 Profiler :: struct {
@@ -56,7 +59,10 @@ profile_block_end :: proc(label: string, start: u64) {
 	active_block := pop(&global_profiler.active_blocks)
 
 	profile := find_or_add_profile(label)
-	profile.elapsed_cycles += elapsed
+	if active_block.is_outermost {
+		profile.elapsed_cycles += elapsed
+		profile.outermost_count += 1
+	}
 	profile.self_cycles += elapsed - active_block.child_cycles
 	profile.hit_count += 1
 
@@ -74,18 +80,29 @@ profile_block_end :: proc(label: string, start: u64) {
 @(deferred_in_out=profile_block_end)
 profile_block :: #force_inline proc(label: string) -> u64 {
 	assert(len(global_profiler.active_blocks) < cap(global_profiler.active_blocks))
-	append(&global_profiler.active_blocks, Active_Block{})
+	is_outermost := true
+	for active_block in global_profiler.active_blocks {
+		if active_block.label == label {
+			is_outermost = false
+			break
+		}
+	}
+	append(
+		&global_profiler.active_blocks,
+		Active_Block{label = label, is_outermost = is_outermost},
+	)
 	return read_cpu_timer()
 }
 
 print_report :: proc() {
 	for profile in global_profiler.profiles {
 		fmt.printfln(
-			"%s: %d inclusive cycles, %d self cycles, %d hits",
+			"%s: %d inclusive cycles, %d self cycles, %d hits, %d outermost hits",
 			profile.label,
 			profile.elapsed_cycles,
 			profile.self_cycles,
 			profile.hit_count,
+			profile.outermost_count,
 		)
 	}
 }

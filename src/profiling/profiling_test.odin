@@ -47,6 +47,7 @@ profile_block_test :: proc(t: ^testing.T) {
 		global_profiler.profiles[0].elapsed_cycles,
 	)
 	testing.expect_value(t, global_profiler.profiles[0].hit_count, u64(2))
+	testing.expect_value(t, global_profiler.profiles[0].outermost_count, u64(2))
 
 	clear(&global_profiler.profiles)
 	{
@@ -65,4 +66,17 @@ profile_block_test :: proc(t: ^testing.T) {
 		parent.self_cycles + child.elapsed_cycles,
 		parent.elapsed_cycles,
 	)
+
+	clear(&global_profiler.profiles)
+	{
+		profile_block("Recursive")
+		{
+			profile_block("Recursive")
+		}
+	}
+
+	recursive := find_or_add_profile("Recursive")
+	testing.expect_value(t, recursive.hit_count, u64(2))
+	testing.expect_value(t, recursive.outermost_count, u64(1))
+	testing.expect_value(t, recursive.self_cycles, recursive.elapsed_cycles)
 }
