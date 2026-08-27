@@ -32,10 +32,10 @@ profile_block_test :: proc(t: ^testing.T) {
 	}
 
 	{
-		profile_block("Test")
+		profile_block("Test", processed_bytes = 64)
 	}
 	{
-		profile_block("Test")
+		profile_block("Test", processed_bytes = 128)
 	}
 
 	testing.expect_value(t, len(global_profiler.profiles), 1)
@@ -48,6 +48,7 @@ profile_block_test :: proc(t: ^testing.T) {
 	)
 	testing.expect_value(t, global_profiler.profiles[0].hit_count, u64(2))
 	testing.expect_value(t, global_profiler.profiles[0].outermost_count, u64(2))
+	testing.expect_value(t, global_profiler.profiles[0].processed_bytes, u64(192))
 
 	clear(&global_profiler.profiles)
 	{
@@ -69,9 +70,9 @@ profile_block_test :: proc(t: ^testing.T) {
 
 	clear(&global_profiler.profiles)
 	{
-		profile_block("Recursive")
+		profile_block("Recursive", processed_bytes = 64)
 		{
-			profile_block("Recursive")
+			profile_block("Recursive", processed_bytes = 128)
 		}
 	}
 
@@ -79,4 +80,5 @@ profile_block_test :: proc(t: ^testing.T) {
 	testing.expect_value(t, recursive.hit_count, u64(2))
 	testing.expect_value(t, recursive.outermost_count, u64(1))
 	testing.expect_value(t, recursive.self_cycles, recursive.elapsed_cycles)
+	testing.expect_value(t, recursive.processed_bytes, u64(64))
 }

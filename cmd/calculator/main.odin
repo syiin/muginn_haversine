@@ -44,6 +44,10 @@ calculate_average_distance :: proc(value: json.Value) -> (f64, bool) {
 		return 0, false
 	}
 
+	profiling.profile_block(
+		"Calculator/Sum",
+		processed_bytes = u64(len(pairs) * 4 * size_of(f64)),
+	)
 	total_distance: f64
 	for pair_value in pairs {
 		pair, is_pair := pair_value.(json.Object)
@@ -141,10 +145,7 @@ main :: proc() {
 
 	average_distance: f64
 	valid: bool
-	{
-		profiling.profile_block("Calculator/Sum")
-		average_distance, valid = calculate_average_distance(value)
-	}
+	average_distance, valid = calculate_average_distance(value)
 	if !valid {
 		fmt.eprintfln(
 			"Expected %q to contain a non-empty array of coordinate pairs",

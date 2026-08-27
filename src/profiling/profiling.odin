@@ -17,6 +17,7 @@ Profile :: struct {
 	self_cycles:     u64,
 	hit_count:       u64, // Includes nested invocations of the same label.
 	outermost_count: u64,
+	processed_bytes: u64,
 }
 
 Active_Block :: struct {
@@ -53,7 +54,7 @@ find_or_add_profile :: proc(label: string) -> ^Profile {
 	return &global_profiler.profiles[len(global_profiler.profiles) - 1]
 }
 
-profile_block_end :: proc(label: string, start: u64) {
+profile_block_end :: proc(label: string, processed_bytes: u64, start: u64) {
 	elapsed := read_cpu_timer() - start
 	assert(len(global_profiler.active_blocks) > 0)
 	active_block := pop(&global_profiler.active_blocks)
@@ -62,6 +63,7 @@ profile_block_end :: proc(label: string, start: u64) {
 	if active_block.is_outermost {
 		profile.elapsed_cycles += elapsed
 		profile.outermost_count += 1
+		profile.processed_bytes += processed_bytes
 	}
 	profile.self_cycles += elapsed - active_block.child_cycles
 	profile.hit_count += 1
@@ -74,11 +76,11 @@ profile_block_end :: proc(label: string, start: u64) {
 
 // Usage:
 // {
-//     profile_block("Parse")
+//     profile_block("Parse", processed_bytes = u64(len(input)))
 //     // Code to profile.
 // }
 @(deferred_in_out=profile_block_end)
-profile_block :: #force_inline proc(label: string) -> u64 {
+profile_block :: #force_inline proc(label: string, processed_bytes: u64 = 0) -> u64 {
 	assert(len(global_profiler.active_blocks) < cap(global_profiler.active_blocks))
 	is_outermost := true
 	for active_block in global_profiler.active_blocks {
@@ -104,6 +106,13 @@ print_report :: proc() {
 			profile.hit_count,
 			profile.outermost_count,
 		)
+		if profile.processed_bytes > 0 {
+			fmt.printfln(
+				"  %.4f MB processed, %.4f cycles/byte",
+				f64(profile.processed_bytes) / 1_000_000,
+				f64(profile.elapsed_cycles) / f64(profile.processed_bytes),
+			)
+		}
 	}
 }
 
