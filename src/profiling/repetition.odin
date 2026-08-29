@@ -1,0 +1,231 @@
+package profiling
+
+import "core:fmt"
+
+Repetition_Test_State :: enum {
+	Ready,
+	Testing,
+	Completed,
+	Error,
+}
+
+Repetition_Test_Result :: struct {
+	iteration_count: u64,
+	total_cycles:    u64,
+	minimum_cycles:  u64,
+	maximum_cycles:  u64,
+}
+
+Repetition_Measurement :: struct {
+	elapsed_cycles:   u64,
+	processed_bytes:  u64,
+	open_block_count: u32,
+	close_block_count: u32,
+}
+
+Repetition_Tester :: struct {
+	state:                  Repetition_Test_State,
+	target_processed_bytes: u64,
+	cpu_timer_frequency:    u64,
+	try_for_cycles:         u64,
+	last_minimum_at:        u64,
+	timing_started_at:      u64,
+	timing_active:          bool,
+	current:                Repetition_Measurement,
+	result:                 Repetition_Test_Result,
+	error_message:          string,
+}
+
+repetition_test_error :: proc(tester: ^Repetition_Tester, message: string) {
+	if tester.state != .Error {
+		tester.state = .Error
+		tester.error_message = message
+	}
+}
+
+repetition_test_start :: proc(
+	tester: ^Repetition_Tester,
+	target_processed_bytes: u64,
+	cpu_timer_frequency: u64,
+	seconds_to_try: f64 = 10,
+) {
+	tester^ = {}
+	if target_processed_bytes == 0 {
+		repetition_test_error(tester, "Target processed byte count must be greater than zero")
+		return
+	}
+	if cpu_timer_frequency == 0 {
+		repetition_test_error(tester, "CPU timer frequency must be greater than zero")
+		return
+	}
+	if seconds_to_try <= 0 {
+		repetition_test_error(tester, "Test duration must be greater than zero")
+		return
+	}
+
+	try_for_cycles := u64(f64(cpu_timer_frequency) * seconds_to_try)
+	if try_for_cycles == 0 {
+		try_for_cycles = 1
+	}
+	tester^ = Repetition_Tester {
+		state = .Testing,
+		target_processed_bytes = target_processed_bytes,
+		cpu_timer_frequency = cpu_timer_frequency,
+		try_for_cycles = try_for_cycles,
+		last_minimum_at = read_cpu_timer(),
+	}
+}
+
+repetition_test_begin_time :: proc(tester: ^Repetition_Tester) {
+	if tester.state != .Testing {
+		return
+	}
+	if tester.timing_active {
+		repetition_test_error(tester, "Timing blocks cannot overlap")
+		return
+	}
+
+	tester.current.open_block_count += 1
+	tester.timing_started_at = read_cpu_timer()
+	tester.timing_active = true
+}
+
+repetition_test_end_time :: proc(tester: ^Repetition_Tester) {
+	if tester.state != .Testing {
+		return
+	}
+	if !tester.timing_active {
+		repetition_test_error(tester, "Timing block ended without being started")
+		return
+	}
+
+	tester.current.elapsed_cycles += read_cpu_timer() - tester.timing_started_at
+	tester.current.close_block_count += 1
+	tester.timing_active = false
+}
+
+repetition_test_count_bytes :: proc(tester: ^Repetition_Tester, processed_bytes: u64) {
+	if tester.state == .Testing {
+		tester.current.processed_bytes += processed_bytes
+	}
+}
+
+@(private)
+repetition_test_commit :: proc(tester: ^Repetition_Tester) -> bool {
+	if tester.state != .Testing {
+		return false
+	}
+	if tester.timing_active {
+		repetition_test_error(tester, "Timing block was not ended")
+		return false
+	}
+
+	measurement := tester.current
+	if measurement.open_block_count == 0 &&
+	   measurement.close_block_count == 0 &&
+	   measurement.processed_bytes == 0 {
+		return true
+	}
+	if measurement.open_block_count != measurement.close_block_count {
+		repetition_test_error(tester, "Timing block counts do not match")
+		return false
+	}
+	if measurement.close_block_count == 0 {
+		repetition_test_error(tester, "No timing block was recorded")
+		return false
+	}
+	if measurement.processed_bytes != tester.target_processed_bytes {
+		repetition_test_error(tester, "Processed byte count does not match the target")
+		return false
+	}
+
+	result := &tester.result
+	result.iteration_count += 1
+	result.total_cycles += measurement.elapsed_cycles
+	if result.iteration_count == 1 || measurement.elapsed_cycles < result.minimum_cycles {
+		result.minimum_cycles = measurement.elapsed_cycles
+		tester.last_minimum_at = read_cpu_timer()
+	}
+	if result.iteration_count == 1 || measurement.elapsed_cycles > result.maximum_cycles {
+		result.maximum_cycles = measurement.elapsed_cycles
+	}
+	tester.current = {}
+	return true
+}
+
+// Usage:
+//
+// repetition_test_start(&tester, byte_count, estimate_cpu_timer_frequency())
+// for repetition_test_is_testing(&tester) {
+//     repetition_test_begin_time(&tester)
+//     // Code under test.
+//     repetition_test_end_time(&tester)
+//     repetition_test_count_bytes(&tester, byte_count)
+// }
+repetition_test_is_testing :: proc(tester: ^Repetition_Tester) -> bool {
+	if !repetition_test_commit(tester) {
+		return false
+	}
+	if tester.result.iteration_count > 0 &&
+	   read_cpu_timer() - tester.last_minimum_at >= tester.try_for_cycles {
+		tester.state = .Completed
+		return false
+	}
+	return true
+}
+
+@(private)
+print_repetition_measurement :: proc(
+	label: string,
+	cycles: u64,
+	processed_bytes: u64,
+	cpu_timer_frequency: u64,
+) {
+	seconds := f64(cycles) / f64(cpu_timer_frequency)
+	gigabytes_per_second: f64
+	if seconds > 0 {
+		gigabytes_per_second = f64(processed_bytes) / seconds / 1_000_000_000
+	}
+	fmt.printfln(
+		"  %s: %d cycles, %.4f ms, %.4f GB/s",
+		label,
+		cycles,
+		seconds * 1_000,
+		gigabytes_per_second,
+	)
+}
+
+print_repetition_test_result :: proc(tester: ^Repetition_Tester) {
+	if tester.state == .Error {
+		fmt.eprintfln("Repetition test error: %s", tester.error_message)
+		return
+	}
+	if tester.result.iteration_count == 0 {
+		fmt.println("Repetition test has no results")
+		return
+	}
+
+	fmt.printfln(
+		"Repetition test: %d iterations of %d bytes",
+		tester.result.iteration_count,
+		tester.target_processed_bytes,
+	)
+	print_repetition_measurement(
+		"Minimum",
+		tester.result.minimum_cycles,
+		tester.target_processed_bytes,
+		tester.cpu_timer_frequency,
+	)
+	print_repetition_measurement(
+		"Average",
+		tester.result.total_cycles / tester.result.iteration_count,
+		tester.target_processed_bytes,
+		tester.cpu_timer_frequency,
+	)
+	print_repetition_measurement(
+		"Maximum",
+		tester.result.maximum_cycles,
+		tester.target_processed_bytes,
+		tester.cpu_timer_frequency,
+	)
+}
