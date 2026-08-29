@@ -27,12 +27,18 @@ Active_Block :: struct {
 }
 
 Profiler :: struct {
-	profiles:      [dynamic; MAX_PROFILE_COUNT]Profile,
-	active_blocks: [dynamic; MAX_PROFILE_COUNT]Active_Block,
+	profiles:            [dynamic; MAX_PROFILE_COUNT]Profile,
+	active_blocks:       [dynamic; MAX_PROFILE_COUNT]Active_Block,
+	cpu_timer_frequency: u64,
 }
 
 @(private)
 global_profiler: Profiler
+
+@(init)
+profiler_init :: proc "contextless" () {
+	global_profiler.cpu_timer_frequency = estimate_cpu_timer_frequency()
+}
 
 // read_cpu_timer returns the platform's CPU timestamp counter. LLVM lowers
 // this to RDTSC on x86 and the architectural virtual counter on Apple Silicon.
@@ -79,7 +85,7 @@ profile_block_end :: proc(label: string, processed_bytes: u64, start: u64) {
 //     profile_block("Parse", processed_bytes = u64(len(input)))
 //     // Code to profile.
 // }
-@(deferred_in_out=profile_block_end)
+@(deferred_in_out = profile_block_end)
 profile_block :: #force_inline proc(label: string, processed_bytes: u64 = 0) -> u64 {
 	assert(len(global_profiler.active_blocks) < cap(global_profiler.active_blocks))
 	is_outermost := true
@@ -98,19 +104,24 @@ profile_block :: #force_inline proc(label: string, processed_bytes: u64 = 0) -> 
 
 print_report :: proc() {
 	for profile in global_profiler.profiles {
+		elapsed_seconds :=
+			f64(profile.elapsed_cycles) / f64(global_profiler.cpu_timer_frequency)
 		fmt.printfln(
-			"%s: %d inclusive cycles, %d self cycles, %d hits, %d outermost hits",
+			"%s: %d inclusive cycles, %.6f seconds, %d self cycles, %d hits, %d outermost hits",
 			profile.label,
 			profile.elapsed_cycles,
+			elapsed_seconds,
 			profile.self_cycles,
 			profile.hit_count,
 			profile.outermost_count,
 		)
 		if profile.processed_bytes > 0 {
+			size_in_mb := f64(profile.processed_bytes) / 1_000_000
 			fmt.printfln(
-				"  %.4f MB processed, %.4f cycles/byte",
-				f64(profile.processed_bytes) / 1_000_000,
+				"  %.4f MB processed, %.4f cycles/byte, %.4f MB/s",
+				size_in_mb,
 				f64(profile.elapsed_cycles) / f64(profile.processed_bytes),
+				size_in_mb / elapsed_seconds,
 			)
 		}
 	}

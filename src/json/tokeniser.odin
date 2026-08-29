@@ -3,7 +3,7 @@ package json
 
 import "core:os"
 
-TOKENISER_BUFFER_SIZE :: 4096
+TOKENISER_BUFFER_SIZE :: 1024 * 1024
 
 Token_Kind :: enum {
 	Invalid,
