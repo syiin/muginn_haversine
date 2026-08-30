@@ -9,17 +9,26 @@ Repetition_Test_State :: enum {
 	Error,
 }
 
+Repetition_Test_Metric_Kind :: enum {
+	Cycles,
+	Page_Faults,
+}
+
+Repetition_Test_Metric :: struct {
+	total:   u64,
+	minimum: u64,
+	maximum: u64,
+}
+
 Repetition_Test_Result :: struct {
 	iteration_count: u64,
-	total_cycles:    u64,
-	minimum_cycles:  u64,
-	maximum_cycles:  u64,
+	metrics:         [Repetition_Test_Metric_Kind]Repetition_Test_Metric,
 }
 
 Repetition_Measurement :: struct {
-	elapsed_cycles:   u64,
-	processed_bytes:  u64,
-	open_block_count: u32,
+	metrics:           [Repetition_Test_Metric_Kind]u64,
+	processed_bytes:   u64,
+	open_block_count:  u32,
 	close_block_count: u32,
 }
 
@@ -29,7 +38,7 @@ Repetition_Tester :: struct {
 	cpu_timer_frequency:    u64,
 	try_for_cycles:         u64,
 	last_minimum_at:        u64,
-	timing_started_at:      u64,
+	metric_starts:          [Repetition_Test_Metric_Kind]u64,
 	timing_active:          bool,
 	current:                Repetition_Measurement,
 	result:                 Repetition_Test_Result,
@@ -84,9 +93,15 @@ repetition_test_begin_time :: proc(tester: ^Repetition_Tester) {
 		repetition_test_error(tester, "Timing blocks cannot overlap")
 		return
 	}
+	page_fault_count, ok := read_os_page_fault_count()
+	if !ok {
+		repetition_test_error(tester, "Failed to read OS page fault count")
+		return
+	}
 
 	tester.current.open_block_count += 1
-	tester.timing_started_at = read_cpu_timer()
+	tester.metric_starts[.Page_Faults] = page_fault_count
+	tester.metric_starts[.Cycles] = read_cpu_timer()
 	tester.timing_active = true
 }
 
@@ -98,8 +113,17 @@ repetition_test_end_time :: proc(tester: ^Repetition_Tester) {
 		repetition_test_error(tester, "Timing block ended without being started")
 		return
 	}
+	cycle_count := read_cpu_timer()
+	page_fault_count, ok := read_os_page_fault_count()
+	if !ok {
+		tester.timing_active = false
+		repetition_test_error(tester, "Failed to read OS page fault count")
+		return
+	}
 
-	tester.current.elapsed_cycles += read_cpu_timer() - tester.timing_started_at
+	tester.current.metrics[.Cycles] += cycle_count - tester.metric_starts[.Cycles]
+	tester.current.metrics[.Page_Faults] +=
+		page_fault_count - tester.metric_starts[.Page_Faults]
 	tester.current.close_block_count += 1
 	tester.timing_active = false
 }
@@ -141,13 +165,23 @@ repetition_test_commit :: proc(tester: ^Repetition_Tester) -> bool {
 
 	result := &tester.result
 	result.iteration_count += 1
-	result.total_cycles += measurement.elapsed_cycles
-	if result.iteration_count == 1 || measurement.elapsed_cycles < result.minimum_cycles {
-		result.minimum_cycles = measurement.elapsed_cycles
-		tester.last_minimum_at = read_cpu_timer()
+	new_cycle_minimum := false
+	for kind in Repetition_Test_Metric_Kind {
+		value := measurement.metrics[kind]
+		metric := &result.metrics[kind]
+		metric.total += value
+		if result.iteration_count == 1 || value < metric.minimum {
+			metric.minimum = value
+			if kind == .Cycles {
+				new_cycle_minimum = true
+			}
+		}
+		if result.iteration_count == 1 || value > metric.maximum {
+			metric.maximum = value
+		}
 	}
-	if result.iteration_count == 1 || measurement.elapsed_cycles > result.maximum_cycles {
-		result.maximum_cycles = measurement.elapsed_cycles
+	if new_cycle_minimum {
+		tester.last_minimum_at = read_cpu_timer()
 	}
 	tester.current = {}
 	return true
@@ -178,6 +212,7 @@ repetition_test_is_testing :: proc(tester: ^Repetition_Tester) -> bool {
 print_repetition_measurement :: proc(
 	label: string,
 	cycles: u64,
+	page_fault_count: u64,
 	processed_bytes: u64,
 	cpu_timer_frequency: u64,
 ) {
@@ -187,11 +222,12 @@ print_repetition_measurement :: proc(
 		gigabytes_per_second = f64(processed_bytes) / seconds / 1_000_000_000
 	}
 	fmt.printfln(
-		"  %s: %d cycles, %.4f ms, %.4f GB/s",
+		"  %s: %d cycles, %.4f ms, %.4f GB/s, %d page faults",
 		label,
 		cycles,
 		seconds * 1_000,
 		gigabytes_per_second,
+		page_fault_count,
 	)
 }
 
@@ -210,21 +246,26 @@ print_repetition_test_result :: proc(tester: ^Repetition_Tester) {
 		tester.result.iteration_count,
 		tester.target_processed_bytes,
 	)
+	cycles := tester.result.metrics[.Cycles]
+	page_faults := tester.result.metrics[.Page_Faults]
 	print_repetition_measurement(
 		"Minimum",
-		tester.result.minimum_cycles,
+		cycles.minimum,
+		page_faults.minimum,
 		tester.target_processed_bytes,
 		tester.cpu_timer_frequency,
 	)
 	print_repetition_measurement(
 		"Average",
-		tester.result.total_cycles / tester.result.iteration_count,
+		cycles.total / tester.result.iteration_count,
+		page_faults.total / tester.result.iteration_count,
 		tester.target_processed_bytes,
 		tester.cpu_timer_frequency,
 	)
 	print_repetition_measurement(
 		"Maximum",
-		tester.result.maximum_cycles,
+		cycles.maximum,
+		page_faults.maximum,
 		tester.target_processed_bytes,
 		tester.cpu_timer_frequency,
 	)

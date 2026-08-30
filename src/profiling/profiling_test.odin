@@ -12,6 +12,16 @@ read_cpu_timer_test :: proc(t: ^testing.T) {
 }
 
 @(test)
+read_os_page_fault_count_test :: proc(t: ^testing.T) {
+	start, start_ok := read_os_page_fault_count()
+	end, end_ok := read_os_page_fault_count()
+
+	testing.expect(t, start_ok)
+	testing.expect(t, end_ok)
+	testing.expect(t, end >= start)
+}
+
+@(test)
 os_timer_test :: proc(t: ^testing.T) {
 	testing.expect_value(t, get_os_timer_frequency(), u64(1_000_000_000))
 	testing.expect(t, read_os_timer() > 0)

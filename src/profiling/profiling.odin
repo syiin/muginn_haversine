@@ -2,6 +2,7 @@ package profiling
 
 import "base:intrinsics"
 import "core:fmt"
+import "core:sys/posix"
 import "core:time"
 
 #assert(
@@ -45,6 +46,17 @@ profiler_init :: proc "contextless" () {
 @(require_results)
 read_cpu_timer :: #force_inline proc "contextless" () -> u64 {
 	return u64(intrinsics.read_cycle_counter())
+}
+
+@(require_results)
+read_os_page_fault_count :: proc() -> (u64, bool) {
+	usage: posix.rusage
+	if posix.getrusage(.SELF, &usage) != .OK {
+		return 0, false
+	}
+	// Match the process-wide page fault count reported by other platforms by
+	// including both minor faults (page reclaims) and major faults.
+	return u64(usage.ru_minflt) + u64(usage.ru_majflt), true
 }
 
 @(private)
