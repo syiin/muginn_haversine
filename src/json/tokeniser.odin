@@ -1,7 +1,7 @@
 #+private
 package json
 
-TOKENISER_BUFFER_SIZE :: 1024 * 1024
+TOKENISER_BUFFER_SIZE :: 64 * 1024
 
 Token_Kind :: enum {
 	Invalid,
